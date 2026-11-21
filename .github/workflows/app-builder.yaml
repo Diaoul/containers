@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-26.04
     outputs:
       platforms: ${{ steps.app-options.outputs.platforms }}
+      registry: ${{ steps.registry.outputs.registry }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,6 +44,13 @@ jobs:
         id: app-options
         with:
           app: ${{ inputs.app }}
+
+      - name: Get Registry
+        id: registry
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "registry=ghcr.io/${OWNER,,}" >> "$GITHUB_OUTPUT"
 
       - name: Get App Versions
         uses: $/.github/actions/app-versions
@@ -58,7 +66,7 @@ jobs:
         with:
           flavor: latest=false
           images: |
-            ghcr.io/${{ github.repository_owner }}/${{ inputs.app }}
+            ${{ steps.registry.outputs.registry }}/${{ inputs.app }}
           tags: |
             type=semver,pattern={{version}},value=${{ steps.app-versions.outputs.semantic }},enable=${{ steps.app-versions.outputs.is-valid-semver && inputs.release }}
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.app-versions.outputs.semantic }},enable=${{ steps.app-versions.outputs.is-valid-semver && inputs.release }}
@@ -135,17 +143,17 @@ jobs:
             cwd://${{ runner.temp }}/docker-metadata-action-bake.json
           set: |
             *.args.VENDOR=${{ github.repository_owner }}
-            *.cache-from=${{ format('type=registry,ref=ghcr.io/{0}/build_cache:{1}-{2},mode=max', github.repository_owner, inputs.app, steps.target.outputs.arch) }}
-            *.cache-to=${{ inputs.release && format('type=registry,ref=ghcr.io/{0}/build_cache:{1}-{2},mode=max,compression=zstd,force-compression=true', github.repository_owner, inputs.app, steps.target.outputs.arch) || '' }}
+            *.cache-from=${{ format('type=registry,ref={0}/build_cache:{1}-{2},mode=max', needs.plan.outputs.registry, inputs.app, steps.target.outputs.arch) }}
+            *.cache-to=${{ inputs.release && format('type=registry,ref={0}/build_cache:{1}-{2},mode=max,compression=zstd,force-compression=true', needs.plan.outputs.registry, inputs.app, steps.target.outputs.arch) || '' }}
             *.labels.org.opencontainers.image.title=${{ inputs.app }}
-            *.labels.org.opencontainers.image.url=https://ghcr.io/${{ github.repository_owner }}/${{ inputs.app }}
+            *.labels.org.opencontainers.image.url=https://${{ needs.plan.outputs.registry }}/${{ inputs.app }}
             *.labels.org.opencontainers.image.version=${{ steps.app-options.outputs.version }}
             *.labels.org.opencontainers.image.revision=${{ github.sha }}
             *.labels.org.opencontainers.image.vendor=${{ github.repository_owner }}
             *.no-cache=${{ inputs.no-cache }}
-            *.output=${{ inputs.release && format('type=image,name=ghcr.io/{0}/{1},push-by-digest=true,name-canonical=true,push=true,compression=zstd,force-compression=true', github.repository_owner, inputs.app) || 'type=docker' }}
+            *.output=${{ inputs.release && format('type=image,name={0}/{1},push-by-digest=true,name-canonical=true,push=true,compression=zstd,force-compression=true', needs.plan.outputs.registry, inputs.app) || 'type=docker' }}
             *.platform=${{ matrix.platform }}
-            *.tags=${{ ! inputs.release && format('ghcr.io/{0}/{1}:sandbox', github.repository_owner, inputs.app) || '' }}
+            *.tags=${{ ! inputs.release && format('{0}/{1}:sandbox', needs.plan.outputs.registry, inputs.app) || '' }}
           source: ./apps/${{ inputs.app }}
           targets: image
 
@@ -172,20 +180,21 @@ jobs:
         uses: $/.github/actions/app-tests
         with:
           app: ${{ inputs.app }}
-          image: ghcr.io/${{ github.repository_owner }}/${{ inputs.app }}:sandbox
+          image: ${{ needs.plan.outputs.registry }}/${{ inputs.app }}:sandbox
 
   merge:
     if: ${{ inputs.release }}
     name: Merge
     runs-on: ubuntu-26.04
     needs:
+      - plan
       - build
     permissions:
       contents: read
       packages: write
     env:
       APP: ${{ inputs.app }}
-      REPO_OWNER: ${{ github.repository_owner }}
+      REGISTRY: ${{ needs.plan.outputs.registry }}
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
     steps:
@@ -212,7 +221,7 @@ jobs:
       - name: Create Manifest List and Push
         working-directory: ${{ runner.temp }}/digests
         run: |
-          IMAGE="ghcr.io/${REPO_OWNER}/${APP}"
+          IMAGE="${REGISTRY}/${APP}"
           docker buildx imagetools create \
               $(jq --raw-output --compact-output --arg image "$IMAGE" '.target."docker-metadata-action".tags | map(select(startswith($image)) | "-t " + .) | join(" ")' "${RUNNER_TEMP}/docker-metadata-action-bake.json") \
               $(printf "${IMAGE}@sha256:%s " *)
@@ -220,19 +229,20 @@ jobs:
       - name: Inspect Image
         run: |
           TAG=$(jq --raw-output '.target."docker-metadata-action".args.DOCKER_META_VERSION' "${RUNNER_TEMP}/docker-metadata-action-bake.json")
-          docker buildx imagetools inspect "ghcr.io/${REPO_OWNER}/${APP}:${TAG}"
+          docker buildx imagetools inspect "${REGISTRY}/${APP}:${TAG}"
 
       - name: Export Digest
         id: digest
         run: |
           TAG=$(jq --raw-output '.target."docker-metadata-action".args.DOCKER_META_VERSION' "${RUNNER_TEMP}/docker-metadata-action-bake.json")
-          DIGEST=$(docker buildx imagetools inspect "ghcr.io/${REPO_OWNER}/${APP}:${TAG}" --format '{{ json . }}' | jq --raw-output '.manifest.digest')
+          DIGEST=$(docker buildx imagetools inspect "${REGISTRY}/${APP}:${TAG}" --format '{{ json . }}' | jq --raw-output '.manifest.digest')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
   attest:
     if: ${{ inputs.release }}
     name: Attest
     needs:
+      - plan
       - merge
     runs-on: ubuntu-26.04
     permissions:
@@ -243,7 +253,7 @@ jobs:
       packages: write
     env:
       APP: ${{ inputs.app }}
-      REPO_OWNER: ${{ github.repository_owner }}
+      REGISTRY: ${{ needs.plan.outputs.registry }}
       DIGEST: ${{ needs.merge.outputs.digest }}
     steps:
       - name: Login to GitHub Container Registry
@@ -257,13 +267,13 @@ jobs:
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           dependency-snapshot: true
-          image: ghcr.io/${{ github.repository_owner }}/${{ inputs.app }}@${{ needs.merge.outputs.digest }}
+          image: ${{ needs.plan.outputs.registry }}/${{ inputs.app }}@${{ needs.merge.outputs.digest }}
 
       - name: Attestation
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           push-to-registry: true
-          subject-name: ghcr.io/${{ github.repository_owner }}/${{ inputs.app }}
+          subject-name: ${{ needs.plan.outputs.registry }}/${{ inputs.app }}
           subject-digest: ${{ needs.merge.outputs.digest }}
 
       - name: Verify Attestation
@@ -271,7 +281,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          gh attestation verify --repo "$REPO" "oci://ghcr.io/${REPO_OWNER}/${APP}@${DIGEST}"
+          gh attestation verify --repo "$REPO" "oci://${REGISTRY}/${APP}@${DIGEST}"
 
   notify:
     if: ${{ inputs.release && !cancelled() && contains(needs.*.result, 'failure') }}
