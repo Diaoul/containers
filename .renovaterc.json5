@@ -49,5 +49,11 @@
       prHourlyLimit: 0,
       prPriority: -1,
     },
+    {
+      description: ["Hermes Agent tagged CalVer releases (v2026.9.24) before semver (v0.23.3); never offer those"],
+      matchDatasources: ["docker"],
+      matchPackageNames: ["docker.io/nousresearch/hermes-agent"],
+      allowedVersions: "!/^v20\\d{2}\\./",
+    },
   ],
 }
