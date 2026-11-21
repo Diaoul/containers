@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-FROM docker.io/nousresearch/hermes-agent:v0.23.3@sha256:3e9fe4c6ef36490f43aa0d0d80f9df64e9c92a576eee3042f1a97c8813c05355
+ARG VERSION
+FROM docker.io/nousresearch/hermes-agent:${VERSION}
 
 # The venv is sealed (no pip) and PM boots the selection recorded with it, so an
 # extra means rebuilding it the way upstream's Dockerfile does: build_env refuses

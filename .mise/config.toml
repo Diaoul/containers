@@ -1,0 +1,17 @@
+min_version = "2026.11.1"
+
+[settings]
+experimental = true
+
+[tools]
+"github:immanuwell/dockerfile-roast" = "1.7.0"
+node = "26.13.1"
+zizmor = "1.32.0"
+
+[tasks.remote-build]
+description = "Trigger a remote build"
+usage = '''
+arg "<app>"
+arg "[release]" help="release flag (default: false)"
+'''
+run = 'gh workflow run release.yaml -f app="$usage_app" -f release="${usage_release:-false}"'

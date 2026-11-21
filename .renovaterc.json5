@@ -1,23 +1,53 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["github>home-operations/renovate-presets#12.0.0", ":timezone(Europe/Paris)"],
-  packageRules: [
+  extends: ["github>home-operations/.github:renovate-config"],
+  schedule: ["at any time"],
+  customManagers: [
     {
-      description: "Base image updates release the app once its build and test pass",
-      matchFileNames: ["apps/**/Dockerfile"],
-      matchManagers: ["dockerfile"],
-      automerge: true,
-      automergeType: "pr",
-      commitMessageTopic: "{{parentDir}} base image",
-      semanticCommitType: "fix",
-      semanticCommitScope: "{{parentDir}}",
+      customType: "regex",
+      description: "Process Annotations in Docker Bake",
+      managerFilePatterns: ["/(^|/)docker-bake\\.hcl$/"],
+      matchStrings: [
+        'datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\\n.+ = "(?<currentValue>[^"]+)"',
+      ],
+      datasourceTemplate: "{{#if datasource}}{{{datasource}}}{{else}}github-releases{{/if}}",
+      versioningTemplate: "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}",
     },
     {
-      description: "Pinned GitHub Actions",
-      matchManagers: ["github-actions"],
-      matchUpdateTypes: ["minor", "patch", "digest"],
+      customType: "regex",
+      description: "Process Annotations in Dockerfiles",
+      managerFilePatterns: ["/(^|/)Dockerfile$/"],
+      matchStrings: [
+        "datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\\n.+(:\\s|=)(&\\S+\\s)?(?<currentValue>\\S+)",
+      ],
+      datasourceTemplate: "{{#if datasource}}{{{datasource}}}{{else}}github-releases{{/if}}",
+      versioningTemplate: "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}",
+    },
+  ],
+  packageRules: [
+    {
+      description: ["Release Rules for App Updates"],
+      addLabels: ["app/{{parentDir}}"],
+      additionalBranchPrefix: "{{parentDir}}-",
+      commitMessageExtra: "( {{currentVersion}} → {{newVersion}} )",
+      commitMessageTopic: "{{depName}}",
+      matchFileNames: ["**/docker-bake.hcl", "**/Dockerfile"],
+      semanticCommitScope: "{{parentDir}}",
+      semanticCommitType: "release",
+    },
+    {
+      description: ["Auto-merge App Updates"],
+      matchFileNames: ["**/docker-bake.hcl"],
       automerge: true,
-      automergeType: "pr",
+      ignoreTests: false,
+    },
+    {
+      description: [
+        "Exempt App Updates from prHourlyLimit and create them last, since they still add to the hourly PR count",
+      ],
+      matchFileNames: ["apps/**"],
+      prHourlyLimit: 0,
+      prPriority: -1,
     },
   ],
 }
